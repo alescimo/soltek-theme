@@ -1,0 +1,373 @@
+{
+  "name": "Soltek AI Chat",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "soltek-chat",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook",
+      "name": "Chat Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "soltek-chat"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Estrai messaggio e sessionId dalla richiesta\nconst body = $input.first().json.body;\n\nconst message = body.message || '';\nconst sessionId = body.sessionId || 'guest-' + Date.now();\nconst timestamp = new Date().toISOString();\n\n// Keywords per capire l'intento\nconst lowerMsg = message.toLowerCase();\n\nlet intent = 'general';\nlet searchTerms = [];\n\n// Riconoscimento intenti\nif (lowerMsg.includes('prezzo') || lowerMsg.includes('costa') || lowerMsg.includes('quanto')) {\n  intent = 'price_query';\n}\nif (lowerMsg.includes('prodott') || lowerMsg.includes('comput') || lowerMsg.includes('pc') || \n    lowerMsg.includes('notebook') || lowerMsg.includes('laptop') || lowerMsg.includes('monitor') ||\n    lowerMsg.includes('stampant') || lowerMsg.includes('mouse') || lowerMsg.includes('tastiera')) {\n  intent = 'product_query';\n  // Estrai termini di ricerca\n  const keywords = ['notebook', 'laptop', 'pc', 'computer', 'monitor', 'stampante', 'mouse', 'tastiera', 'cuffie', 'webcam', 'ssd', 'ram'];\n  searchTerms = keywords.filter(k => lowerMsg.includes(k));\n}\nif (lowerMsg.includes('orari') || lowerMsg.includes('aperto') || lowerMsg.includes('chiuso') || lowerMsg.includes('quando')) {\n  intent = 'hours_query';\n}\nif (lowerMsg.includes('dove') || lowerMsg.includes('indirizzo') || lowerMsg.includes('trovate')) {\n  intent = 'location_query';\n}\nif (lowerMsg.includes('prenot') || lowerMsg.includes('appuntamento')) {\n  intent = 'booking_query';\n}\nif (lowerMsg.includes('assistenza') || lowerMsg.includes('riparazione') || lowerMsg.includes('problema') || lowerMsg.includes('rotto')) {\n  intent = 'support_query';\n}\nif (lowerMsg.includes('corso') || lowerMsg.includes('formazione') || lowerMsg.includes('imparare')) {\n  intent = 'course_query';\n}\n\nreturn {\n  message,\n  sessionId,\n  timestamp,\n  intent,\n  searchTerms,\n  needsProductSearch: intent === 'product_query' || intent === 'price_query'\n};"
+      },
+      "id": "parse-message",
+      "name": "Analizza Messaggio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-product",
+              "leftValue": "={{ $json.needsProductSearch }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-product-search",
+      "name": "Cerca Prodotti?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.WOOCOMMERCE_URL }}/wp-json/wc/v3/products",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "search",
+              "value": "={{ $('Analizza Messaggio').item.json.searchTerms.join(' ') }}"
+            },
+            {
+              "name": "per_page",
+              "value": "5"
+            },
+            {
+              "name": "status",
+              "value": "publish"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "woocommerce-search",
+      "name": "Cerca in WooCommerce",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [910, 200],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "woo-credentials",
+          "name": "WooCommerce API"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Formatta i prodotti trovati per il contesto AI\nconst products = $input.first().json;\nlet productContext = '';\n\nif (Array.isArray(products) && products.length > 0) {\n  productContext = '\\n\\nPRODOTTI DISPONIBILI NEL NEGOZIO:\\n';\n  products.forEach((p, i) => {\n    const price = p.price ? `€${p.price}` : 'Prezzo su richiesta';\n    const stock = p.stock_status === 'instock' ? 'Disponibile' : 'Non disponibile';\n    productContext += `${i+1}. ${p.name} - ${price} (${stock})\\n`;\n    if (p.short_description) {\n      const desc = p.short_description.replace(/<[^>]*>/g, '').substring(0, 100);\n      productContext += `   ${desc}...\\n`;\n    }\n  });\n} else {\n  productContext = '\\n\\nNessun prodotto trovato con questi criteri. Suggerisci al cliente di visitare il negozio o chiamare per info.';\n}\n\nreturn {\n  productContext,\n  productsFound: Array.isArray(products) ? products.length : 0\n};"
+      },
+      "id": "format-products",
+      "name": "Formatta Prodotti",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1130, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Knowledge base con informazioni aziendali\nconst knowledgeBase = {\n  orari: `ORARI DI APERTURA:\n- Lunedì - Venerdì: 9:00 - 13:00 / 16:00 - 20:00\n- Sabato: 9:00 - 13:00\n- Domenica: Chiuso`,\n  \n  contatti: `CONTATTI:\n- Telefono: 0935 686694\n- Email: info@soltek.it\n- WhatsApp: 0935 686694`,\n  \n  indirizzo: `DOVE SIAMO:\nVia delle Rose 12, Piazza Armerina (EN), Sicilia\nFacile parcheggio nelle vicinanze.`,\n  \n  servizi: `SERVIZI OFFERTI:\n- Riparazione PC e Notebook (da €30)\n- Assemblaggio PC su misura (da €50)\n- Installazione Software/OS (da €25)\n- Rimozione virus e malware (da €35)\n- Configurazione reti aziendali (su preventivo)\n- Assistenza a domicilio (da €40)\n- Consulenza IT gratuita\n- Manutenzione stampanti (da €20)`,\n  \n  corsi: `CORSI DI FORMAZIONE:\n- Alfabetizzazione Digitale (Base) - 10 ore - €80\n- Pacchetto Office (Intermedio) - 20 ore - €150\n- Sicurezza Informatica (Base) - 8 ore - €60\n- Social Media per Aziende - 15 ore - €120\n- Corsi personalizzati su richiesta`,\n  \n  azienda: `CHI SIAMO:\nSoltek è il punto di riferimento informatico di Piazza Armerina dal 1995.\nOltre 25 anni di esperienza, più di 10.000 clienti soddisfatti.\nVendita computer, assistenza tecnica, corsi di formazione.`,\n  \n  prenotazione: `PRENOTAZIONI:\nPuoi prenotare un appuntamento:\n- Chiamando lo 0935 686694\n- Scrivendo a info@soltek.it\n- Passando direttamente in negozio`\n};\n\nreturn { knowledgeBase };"
+      },
+      "id": "knowledge-base",
+      "name": "Knowledge Base",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 400]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "mergeByFields": {
+          "values": []
+        },
+        "combinationMode": "multiplex",
+        "options": {}
+      },
+      "id": "merge-context",
+      "name": "Unisci Contesto",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1350, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Costruisci il prompt per l'AI\nconst items = $input.all();\n\n// Recupera dati dai nodi precedenti\nconst messageData = $('Analizza Messaggio').first().json;\nconst knowledgeBase = $('Knowledge Base').first().json.knowledgeBase;\n\n// Prodotti (se cercati)\nlet productContext = '';\ntry {\n  const productData = $('Formatta Prodotti').first();\n  if (productData) {\n    productContext = productData.json.productContext || '';\n  }\n} catch (e) {\n  productContext = '';\n}\n\n// Seleziona info rilevanti dalla knowledge base in base all'intento\nlet relevantKnowledge = '';\nconst intent = messageData.intent;\n\nswitch(intent) {\n  case 'hours_query':\n    relevantKnowledge = knowledgeBase.orari;\n    break;\n  case 'location_query':\n    relevantKnowledge = knowledgeBase.indirizzo + '\\n' + knowledgeBase.contatti;\n    break;\n  case 'booking_query':\n    relevantKnowledge = knowledgeBase.prenotazione + '\\n' + knowledgeBase.orari;\n    break;\n  case 'support_query':\n    relevantKnowledge = knowledgeBase.servizi + '\\n' + knowledgeBase.contatti;\n    break;\n  case 'course_query':\n    relevantKnowledge = knowledgeBase.corsi;\n    break;\n  default:\n    relevantKnowledge = knowledgeBase.azienda + '\\n' + knowledgeBase.contatti;\n}\n\nconst systemPrompt = `Sei l'assistente virtuale di Soltek SAS, un negozio di informatica a Piazza Armerina (Sicilia).\n\nREGOLE:\n- Rispondi SEMPRE in italiano\n- Sii cordiale, professionale e conciso\n- Se non sai qualcosa, suggerisci di chiamare lo 0935 686694\n- Non inventare prezzi o disponibilità non presenti nelle info fornite\n- Per questioni complesse, invita a passare in negozio o prenotare una consulenza\n- Firma come \"Angelo\" o \"Luca\" del team Soltek\n\nINFORMAZIONI AZIENDA:\n${relevantKnowledge}\n${productContext}`;\n\nreturn {\n  systemPrompt,\n  userMessage: messageData.message,\n  sessionId: messageData.sessionId,\n  intent: messageData.intent\n};"
+      },
+      "id": "build-prompt",
+      "name": "Costruisci Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 500
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "={{ $json.systemPrompt }}"
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.userMessage }}"
+            }
+          ]
+        }
+      },
+      "id": "openai-chat",
+      "name": "OpenAI Chat",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.3,
+      "position": [1790, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepara la risposta finale\nconst aiResponse = $input.first().json;\n\nlet responseText = '';\n\n// Gestisci diversi formati di risposta OpenAI\nif (aiResponse.message && aiResponse.message.content) {\n  responseText = aiResponse.message.content;\n} else if (aiResponse.text) {\n  responseText = aiResponse.text;\n} else if (typeof aiResponse === 'string') {\n  responseText = aiResponse;\n} else {\n  responseText = 'Mi scuso, ho avuto un problema tecnico. Per assistenza immediata, chiama lo 0935 686694!';\n}\n\nconst sessionId = $('Costruisci Prompt').first().json.sessionId;\nconst intent = $('Costruisci Prompt').first().json.intent;\n\nreturn {\n  success: true,\n  message: responseText,\n  sessionId,\n  intent,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "format-response",
+      "name": "Formatta Risposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2010, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "send-response",
+      "name": "Invia Risposta",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2230, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fallback: nessuna ricerca prodotti, passa direttamente\nreturn {\n  productContext: '',\n  productsFound: 0\n};"
+      },
+      "id": "no-product-search",
+      "name": "Nessuna Ricerca",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 500]
+    }
+  ],
+  "connections": {
+    "Chat Webhook": {
+      "main": [
+        [
+          {
+            "node": "Analizza Messaggio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analizza Messaggio": {
+      "main": [
+        [
+          {
+            "node": "Cerca Prodotti?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Knowledge Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cerca Prodotti?": {
+      "main": [
+        [
+          {
+            "node": "Cerca in WooCommerce",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nessuna Ricerca",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cerca in WooCommerce": {
+      "main": [
+        [
+          {
+            "node": "Formatta Prodotti",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatta Prodotti": {
+      "main": [
+        [
+          {
+            "node": "Unisci Contesto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Knowledge Base": {
+      "main": [
+        [
+          {
+            "node": "Unisci Contesto",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Nessuna Ricerca": {
+      "main": [
+        [
+          {
+            "node": "Unisci Contesto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unisci Contesto": {
+      "main": [
+        [
+          {
+            "node": "Costruisci Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Costruisci Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat": {
+      "main": [
+        [
+          {
+            "node": "Formatta Risposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatta Risposta": {
+      "main": [
+        [
+          {
+            "node": "Invia Risposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "Soltek",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+    },
+    {
+      "name": "Chat AI",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+    }
+  ],
+  "triggerCount": 0,
+  "pinData": {}
+}
