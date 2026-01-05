@@ -87,20 +87,4 @@
     </nav>
 </header>
 
-<?php
-/**
- * Fallback menu if no menu is set
- */
-function soltek_fallback_menu() {
-    ?>
-    <a href="<?php echo esc_url(home_url('/')); ?>" class="<?php echo is_front_page() ? 'current' : ''; ?>">Home</a>
-    <a href="<?php echo esc_url(home_url('/negozio')); ?>" class="<?php echo is_shop() ? 'current' : ''; ?>">Negozio</a>
-    <a href="<?php echo esc_url(home_url('/servizi')); ?>">Servizi</a>
-    <a href="<?php echo esc_url(home_url('/corsi')); ?>">Corsi</a>
-    <a href="<?php echo esc_url(home_url('/chi-siamo')); ?>">Chi Siamo</a>
-    <a href="<?php echo esc_url(home_url('/contatti')); ?>">Contatti</a>
-    <?php
-}
-?>
-
 <main id="main-content">

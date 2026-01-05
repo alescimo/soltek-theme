@@ -15,6 +15,22 @@ define('SOLTEK_DIR', get_template_directory());
 define('SOLTEK_URI', get_template_directory_uri());
 
 /**
+ * Fallback menu if no menu is set
+ */
+function soltek_fallback_menu() {
+    $current = '';
+    if (is_front_page()) $current = 'home';
+    ?>
+    <a href="<?php echo esc_url(home_url('/')); ?>" class="<?php echo $current === 'home' ? 'current' : ''; ?>">Home</a>
+    <a href="<?php echo esc_url(home_url('/negozio')); ?>">Negozio</a>
+    <a href="<?php echo esc_url(home_url('/servizi')); ?>">Servizi</a>
+    <a href="<?php echo esc_url(home_url('/corsi')); ?>">Corsi</a>
+    <a href="<?php echo esc_url(home_url('/chi-siamo')); ?>">Chi Siamo</a>
+    <a href="<?php echo esc_url(home_url('/contatti')); ?>">Contatti</a>
+    <?php
+}
+
+/**
  * Theme Setup
  */
 function soltek_setup() {
